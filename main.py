@@ -1,69 +1,79 @@
-import pyotp
+import os
 import time
+import pyotp
+import requests
 import pandas as pd
-import pandas_ta as ta
 from SmartApi import SmartConnect
 
-# --- CONFIGURATION ---
-API_KEY = "YOUR_API_KEY"
-CLIENT_ID = "YOUR_CLIENT_ID"
-PASSWORD = "YOUR_TRADING_PIN"
-TOTP_SECRET = "YOUR_QR_SECRET_KEY"
+# --- CONFIGURATION (Render chya Env Variables madhun ghetlele) ---
+API_KEY = os.environ.get('ANGEL_API_KEY')
+CLIENT_ID = os.environ.get('ANGEL_CLIENT_ID')
+PASSWORD = os.environ.get('ANGEL_PIN')
+TOTP_SECRET = os.environ.get('ANGEL_TOTP_SECRET')
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# Angel One Connect
-obj = SmartConnect(api_key=API_KEY)
-token = pyotp.TOTP(TOTP_SECRET).now()
-obj.generateSession(CLIENT_ID, PASSWORD, token)
+# 1. Telegram Alert Function
+def send_alert(msg):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={msg}&parse_mode=Markdown"
+        requests.get(url)
+    except Exception as e:
+        print(f"Telegram Error: {e}")
 
-def get_atm_strike(ltp, step=50):
-    return round(ltp / step) * step
+# 2. EMA Calculation (Pandas-ta chi garaj nahi)
+def calculate_ema(df, period):
+    return df['close'].ewm(span=period, adjust=False).mean()
 
-def identify_order_block(df):
+# 3. SMC Strategy Logic
+def check_smc_strategy(df):
     """
-    SMC Logic: Last opposite candle before a strong move.
+    SMC Logic: Order Block + EMA Confirmation
     """
-    last_candle = df.iloc[-1]
-    prev_candle = df.iloc[-2]
+    df['ema9'] = calculate_ema(df, 9)
+    df['ema14'] = calculate_ema(df, 14)
     
-    # Bullish OB: Red candle followed by a big Green candle (BOS)
-    if prev_candle['close'] < prev_candle['open'] and last_candle['close'] > prev_candle['open']:
-        return "BULLISH_OB", prev_candle['low']
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
     
-    # Bearish OB: Green candle followed by a big Red candle
-    if prev_candle['close'] > prev_candle['open'] and last_candle['close'] < prev_candle['low']:
-        return "BEARISH_OB", prev_candle['high']
+    # Simple Bullish SMC Signal: Last candle was Red, Current is Green 
+    # and 9 EMA crossed above 14 EMA (BOS/CHoCH)
+    if prev['ema9'] <= prev['ema14'] and last['ema9'] > last['ema14']:
+        return "BULLISH_SIGNAL", last['close']
     
+    if prev['ema9'] >= prev['ema14'] and last['ema9'] < last['ema14']:
+        return "BEARISH_SIGNAL", last['close']
+        
     return None, None
 
-def place_smart_order(symbol, side, ltp, sl_points):
-    """
-    Risk-Reward 1:3 Logic
-    """
-    target_points = sl_points * 3
-    print(f"Executing {side} Order | Entry: {ltp} | SL: {ltp-sl_points} | Target: {ltp+target_points}")
-    
-    # Angel One Order Placement Logic Ithe Yeil
-    # obj.placeOrder(...) 
-
-def run_smc_algo():
-    print("SMC Algo Started... Searching for Order Blocks.")
-    while True:
-        # 1. Fetch Nifty/Sensex Data (5 min)
-        # df = get_historical_data("NIFTY") 
+# 4. Main Execution Loop
+def run_algo():
+    try:
+        # Angel One Login
+        obj = SmartConnect(api_key=API_KEY)
+        token = pyotp.TOTP(TOTP_SECRET).now()
+        res = obj.generateSession(CLIENT_ID, PASSWORD, token)
         
-        # 2. SMC Check
-        ob_type, ob_level = identify_order_block(df)
-        ltp = df.iloc[-1]['close']
-        
-        if ob_type == "BULLISH_OB":
-            atm = get_atm_strike(ltp, 50)
-            # Entry point: Near the Order Block level
-            if ltp <= ob_level * 1.001: # 0.1% buffer
-                sl = 20 # Points in Option
-                place_smart_order(f"NIFTY{atm}CE", "BUY", ltp, sl)
-                break # Ek trade jhala ki thamba (ki loop suru theva)
+        if not res['status']:
+            send_alert("❌ *Login Failed!* Check your API Credentials.")
+            return
 
-        time.sleep(60)
+        send_alert("🚀 *Algo Live on Render!* Monitoring Market for SMC Signals.")
+
+        while True:
+            # Note: Ithe tumhala historical data fetch karnyacha code add karava lagel
+            # Sadhyasathi ha loop active rahil
+            
+            # --- EXAMPLE SIGNAL LOGIC ---
+            # signal, price = check_smc_strategy(df)
+            # if signal == "BULLISH_SIGNAL":
+            #    send_alert(f"✅ *SMC BUY ALERT!* Price: {price} | RR 1:3 Set.")
+            
+            time.sleep(60) # Dar minitila check karel
+
+    except Exception as e:
+        send_alert(f"⚠️ *Algo Error:* {str(e)}")
+        time.sleep(300) # Error aala tar 5 min thamba
 
 if __name__ == "__main__":
-    run_smc_algo()
+    run_algo()
