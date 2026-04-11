@@ -1,4 +1,3 @@
-smartapi-python==1.5.0
+smartapi-python
 pyotp
-pandas
 requests
