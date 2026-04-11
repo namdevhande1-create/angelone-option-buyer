@@ -1,5 +1,3 @@
 smartapi-python
 pyotp
 pandas
-pandas-ta
-requests
